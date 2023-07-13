@@ -1,0 +1,22 @@
+num: 38
+kernel: 'sigmoid'
+seed: 43
+# This must keep the same with the train_config, otherwise, the feature may vary since the feature is the 
+# similarity between the test and the training samples
+C: 1
+
+root_path: /data/Colon/MRI/All_data
+image_path: /data/Colon/MRI/All_data/T3/117256/img_cut.nii.gz
+image_label: 1
+
+embedding_dim: 10
+
+target_shape:
+  - 96
+  - 96
+  - 32
+
+test2train_cwssim_matrix_savepath: ./data/test/test2train_cwssim_matrix.npy
+ae_model_savepath: ./ckpts/model/autoencoder_10.pth
+model_savepath: ./ckpts/model/svm_model_num_${num}_kernel_${kernel}_seed_${seed}_C_${C}.pkl
+visualization_savepath: ./ckpts/vis/test/vis_num_${num}_kernel_${kernel}_seed_${seed}_C_${C}.png

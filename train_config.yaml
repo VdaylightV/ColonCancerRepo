@@ -16,5 +16,6 @@ epochs: 200
 
 train2train_cwssim_matrix_savepath: ./data/train2train_cwssim_matrix.npy
 test2train_cwssim_matrix_savepath: ./data/test2train_cwssim_matrix.npy
+ae_model_savepath: ./ckpts/model/autoencoder_10.pth
 model_savepath: ./ckpts/model/svm_model_num_${num}_kernel_${kernel}_seed_${seed}_C_${C}.pkl
 visualization_savepath: ./ckpts/vis/vis_num_${num}_kernel_${kernel}_seed_${seed}_C_${C}.png

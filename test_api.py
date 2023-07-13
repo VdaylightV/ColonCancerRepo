@@ -22,13 +22,8 @@ def main(args):
     kernel = args.kernel
     target_shape = args.target_shape
     
-    train2train_cwssim_matrix_savepath = args.train2train_cwssim_matrix_savepath
-    dir_path = os.path.dirname(train2train_cwssim_matrix_savepath)[0]
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-        
     test2train_cwssim_matrix_savepath = args.test2train_cwssim_matrix_savepath
-    dir_path = os.path.dirname(test2train_cwssim_matrix_savepath)[0]
+    dir_path = os.path.dirname(test2train_cwssim_matrix_savepath)
     if not os.path.exists(dir_path):
         os.makedirs(dir_path, exist_ok=True)
 
@@ -71,14 +66,15 @@ def main(args):
         )
         training_data.append(image_transform(obj))
 
-    testing_data = []
-    for i in test_indices:
-        obj = torchio.Subject(
-            img=torchio.ScalarImage(path=image_files[i]),
-            label=labels[i],
+    single_test_image_obj = torchio.Subject(
+            img=torchio.ScalarImage(path=args.image_path),
+            label=args.image_label,
             transform=image_transform
         )
-        testing_data.append(image_transform(obj))
+    
+    testing_data = []
+
+    testing_data.append(image_transform(single_test_image_obj))
 
 
     import numpy as np
@@ -91,27 +87,7 @@ def main(args):
         numerator = 2 * np.sum(c_a * np.conj(c_b)) + K
         denominator = np.sum(np.abs(c_a) ** 2) + np.sum(np.abs(c_b) ** 2) + K
         return numerator / denominator
-
-    # Calculate the CW-SSIM matrix between all pairs of images in the training set
-    dwt = DWTForward(J=1, wave='db4')
-    cw_ssim_matrix_training_training = np.zeros((len(training_data), len(training_data)))
-    for i in range(len(training_data)):
-        image_i = training_data[i]['img'][torchio.DATA].squeeze().double().numpy()
-        coeffs_i = dwt(torch.from_numpy(image_i).unsqueeze(0).to(torch.float32))[0].squeeze().numpy()
-        for j in range(i, len(training_data)):
-            image_j = training_data[j]['img'][torchio.DATA].squeeze().double().numpy()
-            coeffs_j = dwt(torch.from_numpy(image_j).unsqueeze(0).to(torch.float32))[0].squeeze().numpy()
-            cw_ssim_ij = cw_ssim(coeffs_i, coeffs_j)
-            cw_ssim_matrix_training_training[i, j] = cw_ssim_ij
-            cw_ssim_matrix_training_training[j, i] = cw_ssim_ij
-
-    with open(train2train_cwssim_matrix_savepath, 'wb') as f:
-        np.save(f, cw_ssim_matrix_training_training)
-        
-    # with open(train2train_cwssim_matrix_savepath, 'rb') as f:
-    #     cw_ssim_matrix_training_training = np.load(f)
-    #     print(cw_ssim_matrix_training_training.shape)
-        
+       
             
     # Calculate the CW-SSIM matrix between all pairs of images in the testing set and the training set
     dwt = DWTForward(J=1, wave='db4')
@@ -127,11 +103,6 @@ def main(args):
 
     with open(test2train_cwssim_matrix_savepath, 'wb') as f:
         np.save(f, cw_ssim_matrix_testing_training)
-        
-    # with open("testing2traing_cwssim_matrix.npy", 'rb') as f:
-    #     cw_ssim_matrix_testing_training = np.load(f)
-    #     print(cw_ssim_matrix_testing_training.shape)
-
             
     import numpy as np
     import torch
@@ -167,74 +138,24 @@ def main(args):
     embedding_dim = args.embedding_dim
 
     # Train the autoencoder on the CW-SSIM matrix between training images
-    cw_ssim_matrix_training_training_scaled = MinMaxScaler().fit_transform(cw_ssim_matrix_training_training)
     autoencoder = Autoencoder(len(training_data), embedding_dim)
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
+    state_dict = torch.load(args.ae_model_savepath)
+    autoencoder.load_state_dict(state_dict)
 
-    num_epochs = args.epochs
-    for epoch in range(num_epochs):
-        for i in range(len(training_data)):
-            input_data = torch.from_numpy(cw_ssim_matrix_training_training_scaled[i]).unsqueeze(0).float()
-            target_data = input_data
-            encoded, decoded = autoencoder(input_data)
-
-            loss = criterion(decoded, target_data)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-    dir_path = os.path.dirname(args.ae_model_savepath)
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-    state_dict = autoencoder.state_dict()
-    torch.save(state_dict, args.ae_model_savepath)
-    
-    # Generate the embeddings for training and testing sets
     normalizer = MinMaxScaler()
-    cw_ssim_matrix_training_training_scaled = normalizer.fit_transform(cw_ssim_matrix_training_training)
-    cw_ssim_matrix_testing_training_scaled = normalizer.transform(cw_ssim_matrix_testing_training)
+    cw_ssim_matrix_testing_training_scaled = normalizer.fit_transform(cw_ssim_matrix_testing_training)
 
-    training_embeddings, _ = autoencoder(torch.from_numpy(cw_ssim_matrix_training_training_scaled).float())
     testing_embeddings, _ = autoencoder(torch.from_numpy(cw_ssim_matrix_testing_training_scaled).float())
     
     from sklearn import svm
-
-    # Train an SVM on the embeddings of the training set
-    svm_model = svm.SVC(kernel=kernel, C=C, random_state=seed)
-    svm_model.fit(training_embeddings.detach().numpy(), np.array(labels)[train_indices])
-    filename = args.model_savepath
-    dir_path = os.path.dirname(args.model_savepath)
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-    joblib.dump(svm_model, filename)
-
-    # Make predictions on test set
-    y_pred = svm_model.predict(training_embeddings.detach().numpy())
-    train_labels = np.array(labels)[train_indices]
-
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-    # Calculate evaluation metrics
-    accuracy = accuracy_score(train_labels, y_pred)
-    precision = precision_score(train_labels, y_pred)
-    recall = recall_score(train_labels, y_pred)
-    f1 = f1_score(train_labels, y_pred)
-    cm = confusion_matrix(train_labels, y_pred)
-
-    # Print evaluation metrics
-    print("="*20, "TRAIN", "="*20)
-    print(f"Accuracy: {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"F1-score: {f1:.4f}")
-    print(f"Confusion matrix:\n{cm}")
-
-    ############################################################
+    # Train an SVM on the embeddings of the training set
+    svm_model = joblib.load(args.model_savepath)
 
     # Make predictions on test set
     y_pred = svm_model.predict(testing_embeddings.detach().numpy())
-    test_labels = np.array(labels)[test_indices]
+    test_labels = np.array([single_test_image_obj.label])
 
     # Calculate evaluation metrics
     accuracy = accuracy_score(test_labels, y_pred)
@@ -250,49 +171,6 @@ def main(args):
     print(f"Recall: {recall:.4f}")
     print(f"F1-score: {f1:.4f}")
     print(f"Confusion matrix:\n{cm}")
-
-    print('Conducting visualization!')
-
-    import numpy as np
-    from sklearn.manifold import TSNE
-    import matplotlib.pyplot as plt
-
-    # 读取数据
-
-    # 将两个tensor合并为一个
-    all_embeddings = np.concatenate([training_embeddings.detach().numpy(), testing_embeddings.detach().numpy()], axis=0)
-    all_labels = np.concatenate([train_labels, test_labels], axis=0)
-    
-    print(all_labels)
-
-    # 使用TSNE进行降维
-    tsne = TSNE(n_components=2, random_state=0)
-    embeddings_2d = tsne.fit_transform(all_embeddings)
-
-    # 绘制图像
-    plt.figure(figsize=(8, 8))
-    markers = ['^', 's']  # 标记形状，三角形和五角星
-    colors = ['r', 'b']   # 不同类别用不同颜色表示
-
-    # 绘制训练集数据
-    for i in range(len(colors)):
-        marker = 'o'
-        color = colors[i]
-        plt.scatter(embeddings_2d[all_labels == i, 0], embeddings_2d[all_labels == i, 1], marker=marker, color=color, label='Class {}'.format(i), s=500, alpha=0.5)
-
-    # 绘制测试集数据
-    for i in range(len(colors)):
-        marker = '^'  # 五角星形状
-        color = colors[i]
-        test_indices = np.where(test_labels == i)[0]  # 获取测试集中当前类别的索引
-        plt.scatter(embeddings_2d[len(training_embeddings) + test_indices, 0], embeddings_2d[len(training_embeddings) + test_indices, 1], marker=marker, color=color, label='Class {} (Test)'.format(i), s=500)
-
-    plt.title('Visualization')
-    plt.legend(loc='upper right')
-    dir_path = os.path.dirname(args.visualization_savepath)
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
-    plt.savefig(args.visualization_savepath)
     
     return accuracy, precision, recall, f1
     
