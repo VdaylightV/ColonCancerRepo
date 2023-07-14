@@ -23,3 +23,7 @@ python test_api.py test_api_config.yaml
 ```
 
 Please refer the source code and config file for more details.
+
+
+## Reference
+Wang, Yizhang, et al. "A feature extraction based support vector machine model for rectal cancer T-stage prediction using MRI images." Multimedia Tools and Applications 80.20 (2021): 30907-30917.
